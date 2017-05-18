@@ -68,10 +68,25 @@ FIELD_NAMES = [
 ]
 
 
+class NoOpContextManager():
+    def __init__(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 def prepare_record(cycle, process):
     record = dict(cycle=cycle)
     timestamp = time.time()
-    with process.oneshot():
+    if hasattr(process, 'oneshot'):
+        oneshot = process.oneshot()
+    else:
+        oneshot = NoOpContextManager()
+    with oneshot:
         record['pid'] = process.pid
         for name in FIELD_NAMES:
             attr = getattr(process, name, None)
