@@ -42,32 +42,6 @@ def parse_arguments():
     return arguments
 
 
-FIELD_NAMES = [
-    'cpu_num',
-    'cpu_percent',
-    'cpu_times',
-    'create_time',
-    'cwd',
-    'exe',
-    'gids',
-    'io_counters',
-    'memory_info',
-    'memory_percent',
-    'name',
-    'nice',
-    'num_ctx_switches',
-    'num_fds',
-    'num_handles',
-    'num_threads',
-    'pid',
-    'ppid',
-    'status',
-    'terminal',
-    'uids',
-    'username',
-]
-
-
 class NoOpContextManager():
     def __init__(self):
         pass
@@ -79,52 +53,97 @@ class NoOpContextManager():
         return False
 
 
-def prepare_record(cycle, process):
-    record = dict(cycle=cycle)
-    timestamp = time.time()
-    if hasattr(process, 'oneshot'):
-        oneshot = process.oneshot()
-    else:
-        oneshot = NoOpContextManager()
-    with oneshot:
-        record['pid'] = process.pid
-        for name in FIELD_NAMES:
-            attr = getattr(process, name, None)
-            if attr is None:
-                continue
-            if callable(attr):
-                details = attr()
-            else:
-                details = attr
-            if isinstance(details, tuple) and hasattr(details, '_asdict'):
-                for subkey, value in details._asdict().items():
-                    key = name + '.' + subkey
-                    record[key] = value
-            else:
-                record[name] = details
-    create_time = record['create_time']
-    record['elapsed_seconds'] = timestamp - create_time
-    record['timestamp'] = datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
-    record['create_time'] = datetime.fromtimestamp(create_time, timezone.utc).isoformat()
-    return record
+class SafetyGoggles():
+    def __init__(self, backing = None):
+        self._backing = backing
+
+    def __str__(self):
+        return 'N/A' if self._backing is None else str(self._backing)
+
+    def __getattr__(self, name):
+        if self._backing is None:
+            details = None
+        else:
+            attr = getattr(self._backing, name, None)
+            details = None
+            if attr is not None:
+                details = attr() if callable(attr) else attr
+        if isinstance(details, (int, float, str)):
+            result = details
+        else:
+            result = SafetyGoggles(details)
+        setattr(self, name, result)
+        return result
+
+
+class MeasurementsWriter():
+    def __init__(self, csvfile):
+        self.csvfile = csvfile
+        self.writer = None
+        self.header = []
+        self.record = []
+
+    def writeprocess(self, cycle, process):
+        if hasattr(process, 'oneshot'):
+            oneshot = process.oneshot()
+        else:
+            oneshot = NoOpContextManager()
+        timestamp = time.time()
+        with oneshot:
+            self.writefield(
+                'Timestamp',
+                datetime.fromtimestamp(
+                    timestamp,
+                    timezone.utc,
+                ).isoformat()
+            )
+            p = SafetyGoggles(process)
+            self.writefield('PID', p.pid)
+            self.writefield('PPID', p.ppid)
+            self.writefield('Image', p.name)
+            self.writefield('Elapsed', timestamp - p.create_time)
+            self.writefield('System time', p.cpu_times.system)
+            self.writefield('User time', p.cpu_times.user)
+            self.writefield('Threads', p.num_threads)
+            self.writefield('Active memory', p.memory_info.rss)
+            self.writefield('Virtual memory', p.memory_info.vms)
+            self.writefield('Read operations', p.io_counters.read_count)
+            self.writefield('Read bytes', p.io_counters.read_bytes)
+            self.writefield('Write operations', p.io_counters.write_count)
+            self.writefield('Write bytes', p.io_counters.write_bytes)
+            self.writefield('Cycle', cycle),
+            self.writefield('State', p.status)
+            self.writefield('File descriptors', p.num_fds)
+            self.writefield('Shared memory', p.memory_info.shared)
+            self.writefield('Voluntary context switches', p.num_ctx_switches.voluntary)
+            self.writefield('Involuntary context switches', p.num_ctx_switches.involuntary)
+            self.writefield('Current working directory', p.cwd)
+            self.writerecord()
+
+    def writefield(self, label, value):
+        if self.writer is None:
+            self.header.append(label)
+        self.record.append(value)
+
+    def writerecord(self):
+        if self.writer is None:
+            self.writer = csv.writer(self.csvfile)
+            self.writer.writerow(self.header)
+        self.writer.writerow(self.record)
+        self.record = []
 
 
 def main():
     arguments = parse_arguments()
     cycle = 0
     first = psutil.Popen(arguments.command)
-    first_record = prepare_record(cycle, first)
-    fieldnames = sorted(first_record.keys())
     with open(arguments.measurement_filename, 'w') as measurement_f:
-        writer = csv.DictWriter(measurement_f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerow(first_record)
+        writer = MeasurementsWriter(measurement_f)
         while first.is_running() and first.status() != psutil.STATUS_ZOMBIE:
             cycle += 1
             children = first.children()
             for process in sorted([first, *children], key=lambda _: _.pid):
-                record = prepare_record(cycle, process)
-                writer.writerow(record)
+                writer.writeprocess(cycle, process)
             time.sleep(arguments.seconds_between_cycles)
         first.wait()
 
