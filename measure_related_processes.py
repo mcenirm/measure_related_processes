@@ -11,7 +11,10 @@ import psutil
 
 def build_argument_parser():
     parser = argparse.ArgumentParser(
-        description='Run COMMAND and measure the new process and related processes.',
+        description=(
+            'Run COMMAND and measure the new'
+            ' process and related processes.'
+        ),
     )
     parser.add_argument(
         '-m',
@@ -54,7 +57,7 @@ class NoOpContextManager():
 
 
 class SafetyGoggles():
-    def __init__(self, backing = None):
+    def __init__(self, backing=None):
         self._backing = backing
 
     def __str__(self):
@@ -111,12 +114,18 @@ class MeasurementsWriter():
             self.writefield('Read bytes', p.io_counters.read_bytes)
             self.writefield('Write operations', p.io_counters.write_count)
             self.writefield('Write bytes', p.io_counters.write_bytes)
-            self.writefield('Cycle', cycle),
+            self.writefield('Cycle', cycle)
             self.writefield('State', p.status)
             self.writefield('File descriptors', p.num_fds)
             self.writefield('Shared memory', p.memory_info.shared)
-            self.writefield('Voluntary context switches', p.num_ctx_switches.voluntary)
-            self.writefield('Involuntary context switches', p.num_ctx_switches.involuntary)
+            self.writefield(
+                'Voluntary context switches',
+                p.num_ctx_switches.voluntary,
+            )
+            self.writefield(
+                'Involuntary context switches',
+                p.num_ctx_switches.involuntary,
+            )
             self.writefield('Current working directory', p.cwd)
             self.writerecord()
 
