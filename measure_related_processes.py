@@ -2,11 +2,19 @@
 
 import argparse
 import csv
+import socket
 import sys
 import time
 from datetime import datetime, timezone
 
 import psutil
+
+MEASUREMENTS_FILE_TEMPLATE = "benchmark--{datetime}--{hostname}--{pid}.csv"
+MEASUREMENTS_FILE_EXAMPLE = MEASUREMENTS_FILE_TEMPLATE.format(
+    datetime="DATETIME",
+    hostname="HOSTNAME",
+    pid="PID",
+)
 
 
 def build_argument_parser():
@@ -17,13 +25,13 @@ def build_argument_parser():
         "-m",
         dest="measurement_filename",
         help="name of file to hold measurements",
-        default="measurements.csv",
+        default=MEASUREMENTS_FILE_EXAMPLE,
     )
     parser.add_argument(
         "-s",
         dest="seconds_between_cycles",
         help="seconds between cycles",
-        default=1.0,
+        default=0.1,
     )
     parser.add_argument(
         "command",
@@ -61,17 +69,21 @@ class SafetyGoggles:
         return "N/A" if self._backing is None else str(self._backing)
 
     def __getattr__(self, name):
-        if self._backing is None:
-            details = None
-        else:
+        details = None
+
+        if self._backing is not None:
             attr = getattr(self._backing, name, None)
-            details = None
             if attr is not None:
-                details = attr() if callable(attr) else attr
+                try:
+                    details = attr() if callable(attr) else attr
+                except psutil.AccessDenied:
+                    details = "Transient Error"
+
         if isinstance(details, (int, float, str)):
             result = details
         else:
             result = SafetyGoggles(details)
+
         setattr(self, name, result)
         return result
 
@@ -140,14 +152,24 @@ class MeasurementsWriter:
 
 
 def main():
+    startup = datetime.now().strftime("%Y%m%d%H%M%S")
     arguments = parse_arguments()
+    measurement_filename = arguments.measurement_filename
     cycle = 0
     first = psutil.Popen(arguments.command)
-    with open(arguments.measurement_filename, "w") as measurement_f:
+
+    if measurement_filename == MEASUREMENTS_FILE_EXAMPLE:
+        measurement_filename = MEASUREMENTS_FILE_TEMPLATE.format(
+            datetime=startup,
+            hostname=socket.gethostname(),
+            pid=first.pid,
+        )
+
+    with open(measurement_filename, "w") as measurement_f:
         writer = MeasurementsWriter(measurement_f)
         while first.is_running() and first.status() != psutil.STATUS_ZOMBIE:
             cycle += 1
-            children = first.children()
+            children = first.children(recursive=True)
             for process in sorted([first, *children], key=lambda _: _.pid):
                 writer.writeprocess(cycle, process)
             time.sleep(arguments.seconds_between_cycles)
