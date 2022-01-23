@@ -79,6 +79,17 @@ class SafetyGoggles:
                 except psutil.AccessDenied:
                     details = "Transient Error"
 
+        # TODO
+        # When there is a transient error, then any nested
+        # attribute resolution throws an AttributeError.
+        #
+        # Is the isinstance test below necessary?
+        #
+        # Brainstorming options for fixing this:
+        # * wrap "Transient Error" above in a SafetyGoggles instance
+        # * create a new TransientError class
+        # * rework the entire writefield sequence to use a tuple of attribute names
+
         if isinstance(details, (int, float, str)):
             result = details
         else:
@@ -127,13 +138,9 @@ class MeasurementsWriter:
             self.writefield("State", p.status)
             self.writefield("File descriptors", p.num_fds)
             self.writefield("Shared memory", p.memory_info.shared)
+            self.writefield("Voluntary context switches", p.num_ctx_switches.voluntary)
             self.writefield(
-                "Voluntary context switches",
-                p.num_ctx_switches.voluntary,
-            )
-            self.writefield(
-                "Involuntary context switches",
-                p.num_ctx_switches.involuntary,
+                "Involuntary context switches", p.num_ctx_switches.involuntary
             )
             self.writefield("Current working directory", p.cwd)
             self.writerecord()
